@@ -6,6 +6,7 @@
  * 消费模型：Measure、Tree；复用组件：<FilterBar>、<EmptyPanel>、<StatBadge>
  */
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
@@ -13,7 +14,9 @@ import StatBadge from '@/components/common/StatBadge.vue'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import { useMeasureStore } from '@/stores/measureStore'
 import { useTreeStore } from '@/stores/treeStore'
+import { useScheduleStore } from '@/stores/scheduleStore'
 import { db } from '@/utils/db'
+import { ROUTES } from '@/router'
 import {
   MEASURE_STATE_OPTIONS,
   MEASURE_TYPE_OPTIONS,
@@ -23,8 +26,10 @@ import {
   type MeasureType,
 } from '@/types/measure'
 
+const router = useRouter()
 const treeStore = useTreeStore()
 const measureStore = useMeasureStore()
+const scheduleStore = useScheduleStore()
 
 const { rows, loading } = useIdbTable<Measure>(db.measures, { sortByUpdatedAt: false })
 
@@ -80,7 +85,9 @@ const stats = computed(() => {
 })
 
 onMounted(() => {
-  void treeStore.loadAll()
+  void treeStore.loadAll().then(() => {
+    void scheduleStore.init()
+  })
   void measureStore.init()
 })
 
@@ -326,6 +333,21 @@ function handleFilterChange(key: string, value: string): void {
             >
               {{ row.state }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前工单" width="170">
+          <template #default="{ row }">
+            <el-button
+              v-if="scheduleStore.activeOrderOfSource('measure', row.id)"
+              link
+              type="warning"
+              size="small"
+              @click="router.push(ROUTES.schedule)"
+            >
+              {{ scheduleStore.activeOrderOfSource('measure', row.id)?.code }} ·
+              {{ scheduleStore.activeOrderOfSource('measure', row.id)?.date }}
+            </el-button>
+            <span v-else class="cell-sub">未派单</span>
           </template>
         </el-table-column>
         <el-table-column label="草稿" width="150">

@@ -5,6 +5,7 @@
  * 消费模型：Support、Tree；复用组件：<StatBadge>、<EmptyPanel>、<FilterBar>、<VigorTag>
  */
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
@@ -12,12 +13,16 @@ import StatBadge from '@/components/common/StatBadge.vue'
 import VigorTag from '@/components/common/VigorTag.vue'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import { useTreeStore } from '@/stores/treeStore'
+import { useScheduleStore } from '@/stores/scheduleStore'
 import { db, markSupportChecked } from '@/utils/db'
+import { ROUTES } from '@/router'
 import { SUPPORT_TYPE_OPTIONS, type Support, type SupportDraft, type SupportType } from '@/types/support'
 import { isSupportOverdue, nextCheckDate, overdueDays } from '@/utils/dimension'
 import { today } from '@/utils/id'
 
+const router = useRouter()
 const treeStore = useTreeStore()
+const scheduleStore = useScheduleStore()
 
 const { rows, loading, create, update, remove } = useIdbTable<Support>(db.supports, { sortByUpdatedAt: false })
 
@@ -74,7 +79,9 @@ const overdueRows = computed<Support[]>(() =>
 const coveredTrees = computed<number>(() => new Set(rows.value.map((row) => row.treeId)).size)
 
 onMounted(() => {
-  void treeStore.loadAll()
+  void treeStore.loadAll().then(() => {
+    void scheduleStore.init()
+  })
 })
 
 function rowClassName({ row }: { row: Support }): string {
@@ -284,6 +291,24 @@ function handleFilterChange(key: string, value: string): void {
             <el-tag v-else type="success" effect="light">周期内</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="复查工单" width="170">
+          <template #default="{ row }">
+            <el-button
+              v-if="scheduleStore.activeOrderOfSource('support', row.id)"
+              link
+              type="warning"
+              size="small"
+              @click="router.push(ROUTES.schedule)"
+            >
+              {{ scheduleStore.activeOrderOfSource('support', row.id)?.code }} ·
+              {{ scheduleStore.activeOrderOfSource('support', row.id)?.date }}
+            </el-button>
+            <span v-else-if="isSupportOverdue(row.lastCheckDate, row.checkCycleMon)" class="cell-warn">
+              未派单（可进排程台收集）
+            </span>
+            <span v-else class="cell-sub">无需复查</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button
@@ -394,6 +419,11 @@ function handleFilterChange(key: string, value: string): void {
 .cell-warn {
   color: #c0392b;
   font-weight: 600;
+}
+
+.cell-sub {
+  font-size: 12px;
+  color: #8c8479;
 }
 
 .mb-14 {

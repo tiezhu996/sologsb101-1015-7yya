@@ -15,13 +15,16 @@ import { useIdbTable } from '@/hooks/useIdbTable'
 import { HISTORY_KIND_LABEL, useTreeHistory } from '@/hooks/useTreeHistory'
 import { useReviewStore } from '@/stores/reviewStore'
 import { useTreeStore } from '@/stores/treeStore'
+import { useScheduleStore } from '@/stores/scheduleStore'
 import { DB_NAME, DB_SCHEMA_VERSION, db, exportSnapshot, importSnapshot, resetDatabase } from '@/utils/db'
+import { ROUTES } from '@/router'
 import { exportSnapshotJson, exportTreeCsvFile, parseSnapshot } from '@/utils/export'
 import { TREND_OPTIONS, VIGOR_OPTIONS, VIGOR_NEED_FOLLOW_UP, type Review, type ReviewDraft, type Trend, type Vigor } from '@/types/review'
 
 const router = useRouter()
 const treeStore = useTreeStore()
 const reviewStore = useReviewStore()
+const scheduleStore = useScheduleStore()
 
 const { rows, loading, remove } = useIdbTable<Review>(db.reviews, { sortByUpdatedAt: false })
 
@@ -82,7 +85,9 @@ const weakCount = computed<number>(
 )
 
 onMounted(() => {
-  void treeStore.loadAll()
+  void treeStore.loadAll().then(() => {
+    void scheduleStore.init()
+  })
   void reviewStore.init()
   timelineTreeId.value = treeStore.currentTreeId
 })
@@ -173,7 +178,8 @@ function handleExportCsv(): void {
     treeStore.surveys,
     treeStore.measures,
     treeStore.supports,
-    treeStore.reviews
+    treeStore.reviews,
+    scheduleStore.orders
   )
   ElMessage.success(`已导出古树养护总览 ${filename}`)
 }
@@ -364,6 +370,21 @@ function handleFilterChange(key: string, value: string): void {
                 <span v-else>{{ row.followUp }}</span>
               </template>
             </el-table-column>
+            <el-table-column label="复评工单" width="170">
+              <template #default="{ row }">
+                <el-button
+                  v-if="scheduleStore.activeOrderOfSource('review', row.id)"
+                  link
+                  type="warning"
+                  size="small"
+                  @click.stop="router.push(ROUTES.schedule)"
+                >
+                  {{ scheduleStore.activeOrderOfSource('review', row.id)?.code }} ·
+                  {{ scheduleStore.activeOrderOfSource('review', row.id)?.date }}
+                </el-button>
+                <span v-else class="cell-sub">未派单</span>
+              </template>
+            </el-table-column>
             <el-table-column label="操作" width="140" fixed="right">
               <template #default="{ row }">
                 <el-button link type="primary" size="small" @click.stop="openEdit(row)">编辑</el-button>
@@ -501,6 +522,11 @@ function handleFilterChange(key: string, value: string): void {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.cell-sub {
+  font-size: 12px;
+  color: #8c8479;
 }
 
 .cell-sub {

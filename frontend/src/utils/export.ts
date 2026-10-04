@@ -9,8 +9,10 @@ import type { Survey } from '../types/survey'
 import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
+import type { WorkOrder } from '../types/schedule'
 import { stampSuffix } from './id'
 import { isSupportOverdue, overdueDays } from './dimension'
+import { JOB_KIND_LABEL } from '../types/schedule'
 
 /** 触发浏览器下载 */
 export function download(filename: string, content: string, mime: string): void {
@@ -72,7 +74,16 @@ export function parseSnapshot(text: string): SnapshotParseResult {
       return { ok: false, message: `存档缺少 ${String(key)} 数组。`, snapshot: null }
     }
   }
-  return { ok: true, message: '存档校验通过。', snapshot: data as DatabaseSnapshot }
+  // scheduleItems / workOrders 为 v3 新增：导入旧版（v2）存档时按空数组兜底
+  return {
+    ok: true,
+    message: '存档校验通过。',
+    snapshot: {
+      ...(data as DatabaseSnapshot),
+      scheduleItems: Array.isArray(data.scheduleItems) ? data.scheduleItems : [],
+      workOrders: Array.isArray(data.workOrders) ? data.workOrders : [],
+    },
+  }
 }
 
 /** 生成古树养护总览 CSV（一树一行） */
@@ -82,6 +93,7 @@ export function buildTreeCsv(
   measures: Measure[],
   supports: Support[],
   reviews: Review[],
+  workOrders: WorkOrder[] = [],
 ): string {
   const header = [
     '编号',
@@ -106,6 +118,7 @@ export function buildTreeCsv(
     '复评次数',
     '最新长势',
     '最新趋势',
+    '当前工单',
   ]
   const lines: string[] = [header.map(csvCell).join(',')]
   trees.forEach((tree) => {
@@ -116,6 +129,9 @@ export function buildTreeCsv(
     const treeReviews = reviews.filter((row) => row.treeId === tree.id).sort((a, b) => a.date.localeCompare(b.date))
     const latestReview = treeReviews.length > 0 ? treeReviews[treeReviews.length - 1] : null
     const overdue = treeSupports.filter((row) => isSupportOverdue(row.lastCheckDate, row.checkCycleMon))
+    const activeOrders = workOrders.filter(
+      (order) => order.treeId === tree.id && (order.state === '待执行' || order.state === '执行中')
+    )
     lines.push(
       [
         tree.code,
@@ -140,6 +156,11 @@ export function buildTreeCsv(
         treeReviews.length,
         latestReview === null ? '—' : latestReview.vigor,
         latestReview === null ? '—' : latestReview.trend,
+        activeOrders.length === 0
+          ? '无'
+          : activeOrders
+              .map((order) => `${order.date} ${JOB_KIND_LABEL[order.kind]}（${order.code} ${order.operator} ${order.state}）`)
+              .join('；'),
       ]
         .map(csvCell)
         .join(','),
@@ -155,9 +176,10 @@ export function exportTreeCsvFile(
   measures: Measure[],
   supports: Support[],
   reviews: Review[],
+  workOrders: WorkOrder[] = [],
 ): string {
   const filename = `古树名木养护总览-${stampSuffix()}.csv`
-  download(filename, buildTreeCsv(trees, surveys, measures, supports, reviews), 'text/csv;charset=utf-8')
+  download(filename, buildTreeCsv(trees, surveys, measures, supports, reviews, workOrders), 'text/csv;charset=utf-8')
   return filename
 }
 

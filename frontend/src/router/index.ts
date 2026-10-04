@@ -1,5 +1,5 @@
 /**
- * 路由表：/trees、/trees/:id/surveys、/measures、/supports、/reviews
+ * 路由表：/trees、/trees/:id/surveys、/measures、/supports、/reviews、/schedule
  * 层级路由支持直接深链访问（配合 nginx try_files 回退）；页面按路由懒加载自动分包。
  */
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
@@ -11,6 +11,7 @@ export const ROUTES = {
   measures: '/measures',
   supports: '/supports',
   reviews: '/reviews',
+  schedule: '/schedule',
 } as const
 
 const routes: RouteRecordRaw[] = [
@@ -44,6 +45,12 @@ const routes: RouteRecordRaw[] = [
     name: 'review-view',
     component: () => import('@/pages/ReviewView.vue'),
     meta: { title: '长势复评与结构版本' },
+  },
+  {
+    path: '/schedule',
+    name: 'schedule-board',
+    component: () => import('@/pages/ScheduleBoard.vue'),
+    meta: { title: '养护排程台' },
   },
   { path: '/:pathMatch(.*)*', redirect: ROUTES.trees },
 ]

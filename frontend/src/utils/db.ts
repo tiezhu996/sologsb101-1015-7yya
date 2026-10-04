@@ -11,6 +11,7 @@ import type { Survey } from '../types/survey'
 import type { Measure, MeasureState } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
+import type { ScheduleItem, WorkOrder } from '../types/schedule'
 import { nowIso, today } from './id'
 import { seedDatabase } from './seed'
 
@@ -18,10 +19,10 @@ import { seedDatabase } from './seed'
 export const DB_NAME = 'gbheritagetree'
 
 /** 当前数据结构版本号（每次调整字段结构必须 +1 并补迁移） */
-export const DB_SCHEMA_VERSION = 2
+export const DB_SCHEMA_VERSION = 3
 
 /** 数据行结构修订号 */
-export const ROW_REVISION = 2
+export const ROW_REVISION = 3
 
 class HeritageTreeDatabase extends Dexie {
   trees!: Table<Tree, string>
@@ -29,6 +30,8 @@ class HeritageTreeDatabase extends Dexie {
   measures!: Table<Measure, string>
   supports!: Table<Support, string>
   reviews!: Table<Review, string>
+  scheduleItems!: Table<ScheduleItem, string>
+  workOrders!: Table<WorkOrder, string>
 
   constructor() {
     super(DB_NAME)
@@ -43,7 +46,7 @@ class HeritageTreeDatabase extends Dexie {
     })
 
     // ---------- v2：补齐索引与回写字段，并迁移历史数据 ----------
-    this.version(DB_SCHEMA_VERSION)
+    this.version(2)
       .stores({
         trees: 'id, code, species, protectLevel, ageYears, createdAt, updatedAt, owner',
         // 复合索引 [treeId+date]：按古树 + 日期快速取检查记录
@@ -63,7 +66,7 @@ class HeritageTreeDatabase extends Dexie {
         ]
         for (const table of tables) {
           await table.toCollection().modify((row: Record<string, unknown>) => {
-            row.revision = ROW_REVISION
+            row.revision = 2
             if (typeof row.createdAt !== 'string') row.createdAt = nowIso()
             if (typeof row.updatedAt !== 'string') row.updatedAt = row.createdAt
           })
@@ -82,6 +85,18 @@ class HeritageTreeDatabase extends Dexie {
           if (typeof row.checkCycleMon !== 'number') row.checkCycleMon = 12
         })
       })
+
+    // ---------- v3：养护排程台与工单 ----------
+    // scheduleItems：排程台条目；workOrders：批次确认后生成的现场工单
+    this.version(DB_SCHEMA_VERSION).stores({
+      trees: 'id, code, species, protectLevel, ageYears, createdAt, updatedAt, owner',
+      surveys: 'id, treeId, [treeId+date], date, siteNote',
+      measures: 'id, treeId, type, state, date, operator',
+      supports: 'id, treeId, type, installDate, lastCheckDate',
+      reviews: 'id, treeId, date, vigor, trend',
+      scheduleItems: 'id, treeId, kind, state, plannedDate, sourceId, [kind+sourceId]',
+      workOrders: 'id, treeId, kind, state, date, operator, code, scheduleItemId, [kind+sourceId]',
+    })
   }
 }
 
@@ -123,15 +138,21 @@ export async function putTree(row: Tree): Promise<void> {
   await db.trees.put({ ...row, updatedAt: nowIso(), revision: ROW_REVISION })
 }
 
-/** 删除古树并级联清理其检查、措施、加固与复评记录 */
+/** 删除古树并级联清理其检查、措施、加固、复评、排程与工单记录 */
 export async function removeTree(id: string): Promise<void> {
-  await db.transaction('rw', db.trees, db.surveys, db.measures, db.supports, db.reviews, async () => {
-    await db.surveys.where('treeId').equals(id).delete()
-    await db.measures.where('treeId').equals(id).delete()
-    await db.supports.where('treeId').equals(id).delete()
-    await db.reviews.where('treeId').equals(id).delete()
-    await db.trees.delete(id)
-  })
+  await db.transaction(
+    'rw',
+    [db.trees, db.surveys, db.measures, db.supports, db.reviews, db.scheduleItems, db.workOrders],
+    async () => {
+      await db.surveys.where('treeId').equals(id).delete()
+      await db.measures.where('treeId').equals(id).delete()
+      await db.supports.where('treeId').equals(id).delete()
+      await db.reviews.where('treeId').equals(id).delete()
+      await db.scheduleItems.where('treeId').equals(id).delete()
+      await db.workOrders.where('treeId').equals(id).delete()
+      await db.trees.delete(id)
+    }
+  )
 }
 
 /* ------------------------------ 树体检查 ------------------------------ */
@@ -240,6 +261,55 @@ export async function removeReview(id: string): Promise<void> {
   await db.reviews.delete(id)
 }
 
+/* ------------------------------ 养护排程台 ------------------------------ */
+
+export async function listScheduleItems(): Promise<ScheduleItem[]> {
+  const rows = await db.scheduleItems.toArray()
+  return rows.sort((a, b) => b.priorityScore - a.priorityScore || a.rankOrder - b.rankOrder)
+}
+
+export async function bulkPutScheduleItems(rows: ScheduleItem[]): Promise<void> {
+  if (rows.length === 0) return
+  await db.scheduleItems.bulkPut(rows.map((row) => ({ ...row, updatedAt: nowIso(), revision: ROW_REVISION })))
+}
+
+export async function removeScheduleItem(id: string): Promise<void> {
+  await db.scheduleItems.delete(id)
+}
+
+/** 把生成工单的排程条目移出排程台 */
+export async function removeScheduleItems(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  await db.scheduleItems.bulkDelete(ids)
+}
+
+/* -------------------------------- 工单 -------------------------------- */
+
+export async function listWorkOrders(): Promise<WorkOrder[]> {
+  const rows = await db.workOrders.toArray()
+  return rows.sort((a, b) =>
+    a.date.localeCompare(b.date) || b.priorityScore - a.priorityScore || a.code.localeCompare(b.code)
+  )
+}
+
+export async function putWorkOrder(row: WorkOrder): Promise<void> {
+  await db.workOrders.put({ ...row, updatedAt: nowIso(), revision: ROW_REVISION })
+}
+
+export async function bulkPutWorkOrders(rows: WorkOrder[]): Promise<void> {
+  if (rows.length === 0) return
+  await db.workOrders.bulkPut(rows.map((row) => ({ ...row, updatedAt: nowIso(), revision: ROW_REVISION })))
+}
+
+export async function removeWorkOrder(id: string): Promise<void> {
+  await db.workOrders.delete(id)
+}
+
+/** 当天已生成的工单数（用于工单编号流水号） */
+export async function countWorkOrdersByDate(date: string): Promise<number> {
+  return db.workOrders.where('date').equals(date).count()
+}
+
 /* ---------------------------- 整库快照 ---------------------------- */
 
 export interface DatabaseSnapshot {
@@ -251,60 +321,93 @@ export interface DatabaseSnapshot {
   measures: Measure[]
   supports: Support[]
   reviews: Review[]
+  scheduleItems: ScheduleItem[]
+  workOrders: WorkOrder[]
 }
 
 /** 导出整库快照 */
 export async function exportSnapshot(): Promise<DatabaseSnapshot> {
-  const [trees, surveys, measures, supports, reviews] = await Promise.all([
+  const [trees, surveys, measures, supports, reviews, scheduleItems, workOrders] = await Promise.all([
     db.trees.toArray(),
     db.surveys.toArray(),
     db.measures.toArray(),
     db.supports.toArray(),
     db.reviews.toArray(),
+    db.scheduleItems.toArray(),
+    db.workOrders.toArray(),
   ])
-  return { name: DB_NAME, schemaVersion: DB_SCHEMA_VERSION, exportedAt: nowIso(), trees, surveys, measures, supports, reviews }
+  return {
+    name: DB_NAME,
+    schemaVersion: DB_SCHEMA_VERSION,
+    exportedAt: nowIso(),
+    trees,
+    surveys,
+    measures,
+    supports,
+    reviews,
+    scheduleItems,
+    workOrders,
+  }
 }
 
-/** 用快照覆盖整库（导入存档） */
+/** 用快照覆盖整库（导入存档；兼容缺少排程 / 工单数组的 v2 存档） */
 export async function importSnapshot(snapshot: DatabaseSnapshot): Promise<void> {
-  await db.transaction('rw', db.trees, db.surveys, db.measures, db.supports, db.reviews, async () => {
-    await Promise.all([
-      db.trees.clear(),
-      db.surveys.clear(),
-      db.measures.clear(),
-      db.supports.clear(),
-      db.reviews.clear(),
-    ])
-    await db.trees.bulkPut(snapshot.trees.map((row) => ({ ...row, revision: ROW_REVISION })))
-    await db.surveys.bulkPut(snapshot.surveys.map((row) => ({ ...row, revision: ROW_REVISION })))
-    await db.measures.bulkPut(snapshot.measures.map((row) => ({ ...row, revision: ROW_REVISION })))
-    await db.supports.bulkPut(snapshot.supports.map((row) => ({ ...row, revision: ROW_REVISION })))
-    await db.reviews.bulkPut(snapshot.reviews.map((row) => ({ ...row, revision: ROW_REVISION })))
-  })
+  await db.transaction(
+    'rw',
+    [db.trees, db.surveys, db.measures, db.supports, db.reviews, db.scheduleItems, db.workOrders],
+    async () => {
+      await Promise.all([
+        db.trees.clear(),
+        db.surveys.clear(),
+        db.measures.clear(),
+        db.supports.clear(),
+        db.reviews.clear(),
+        db.scheduleItems.clear(),
+        db.workOrders.clear(),
+      ])
+      await db.trees.bulkPut(snapshot.trees.map((row) => ({ ...row, revision: ROW_REVISION })))
+      await db.surveys.bulkPut(snapshot.surveys.map((row) => ({ ...row, revision: ROW_REVISION })))
+      await db.measures.bulkPut(snapshot.measures.map((row) => ({ ...row, revision: ROW_REVISION })))
+      await db.supports.bulkPut(snapshot.supports.map((row) => ({ ...row, revision: ROW_REVISION })))
+      await db.reviews.bulkPut(snapshot.reviews.map((row) => ({ ...row, revision: ROW_REVISION })))
+      await db.scheduleItems.bulkPut(
+        (snapshot.scheduleItems ?? []).map((row) => ({ ...row, revision: ROW_REVISION }))
+      )
+      await db.workOrders.bulkPut((snapshot.workOrders ?? []).map((row) => ({ ...row, revision: ROW_REVISION })))
+    }
+  )
 }
 
 /** 清空全部数据并重新灌入演示数据 */
 export async function resetDatabase(): Promise<void> {
-  await db.transaction('rw', db.trees, db.surveys, db.measures, db.supports, db.reviews, async () => {
-    await Promise.all([
-      db.trees.clear(),
-      db.surveys.clear(),
-      db.measures.clear(),
-      db.supports.clear(),
-      db.reviews.clear(),
-    ])
-  })
+  await db.transaction(
+    'rw',
+    [db.trees, db.surveys, db.measures, db.supports, db.reviews, db.scheduleItems, db.workOrders],
+    async () => {
+      await Promise.all([
+        db.trees.clear(),
+        db.surveys.clear(),
+        db.measures.clear(),
+        db.supports.clear(),
+        db.reviews.clear(),
+        db.scheduleItems.clear(),
+        db.workOrders.clear(),
+      ])
+    }
+  )
   await seedDatabase()
 }
 
 /** 各表行数统计 */
 export async function countAll(): Promise<Record<string, number>> {
-  const [trees, surveys, measures, supports, reviews] = await Promise.all([
+  const [trees, surveys, measures, supports, reviews, scheduleItems, workOrders] = await Promise.all([
     db.trees.count(),
     db.surveys.count(),
     db.measures.count(),
     db.supports.count(),
     db.reviews.count(),
+    db.scheduleItems.count(),
+    db.workOrders.count(),
   ])
-  return { trees, surveys, measures, supports, reviews }
+  return { trees, surveys, measures, supports, reviews, scheduleItems, workOrders }
 }

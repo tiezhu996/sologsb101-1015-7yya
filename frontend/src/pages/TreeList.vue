@@ -12,6 +12,8 @@ import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import StatBadge from '@/components/common/StatBadge.vue'
 import VigorTag from '@/components/common/VigorTag.vue'
 import { useTreeStore } from '@/stores/treeStore'
+import { useScheduleStore } from '@/stores/scheduleStore'
+import { ROUTES } from '@/router'
 import {
   PROTECT_LEVEL_OPTIONS,
   TREE_SPECIES_CANDIDATES,
@@ -19,9 +21,11 @@ import {
   type Tree,
   type TreeDraft,
 } from '@/types/tree'
+import { JOB_KIND_LABEL } from '@/types/schedule'
 
 const router = useRouter()
 const treeStore = useTreeStore()
+const scheduleStore = useScheduleStore()
 
 const dialogVisible = ref(false)
 const submitting = ref(false)
@@ -68,7 +72,9 @@ const totals = computed(() => {
 })
 
 onMounted(() => {
-  void treeStore.loadAll()
+  void treeStore.loadAll().then(() => {
+    void scheduleStore.init()
+  })
 })
 
 function openCreate(): void {
@@ -150,6 +156,14 @@ function handleFilterChange(key: string, value: string): void {
       <StatBadge label="一级古树" :value="totals.level1" suffix="株" tone="success" icon="DataLine" />
       <StatBadge label="衰弱/濒危" :value="totals.weak" suffix="株" tone="danger" icon="Warning" hint="最新长势为衰弱或濒危的古树" />
       <StatBadge label="加固件超期" :value="totals.overdue" suffix="件" tone="warning" icon="Warning" hint="超过检查周期未检查的加固件" />
+      <StatBadge
+        label="当前工单"
+        :value="scheduleStore.activeOrders.length"
+        suffix="张"
+        :tone="scheduleStore.activeOrders.length > 0 ? 'warning' : 'success'"
+        icon="Calendar"
+        hint="批次确认后生成、尚未完成的现场工单"
+      />
       <StatBadge label="筛选结果" :value="rows.length" suffix="株" tone="info" icon="PieChart" size="small" />
     </div>
 
@@ -255,6 +269,29 @@ function handleFilterChange(key: string, value: string): void {
             <span v-else>{{ row.lastMeasureDate }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="当前工单" width="150">
+          <template #default="{ row }">
+            <el-popover
+              v-if="scheduleStore.activeOrdersOfTree(row.id).length > 0"
+              placement="left"
+              :width="280"
+              trigger="hover"
+            >
+              <template #reference>
+                <el-button size="small" type="warning" plain @click="router.push(ROUTES.schedule)">
+                  {{ scheduleStore.activeOrdersOfTree(row.id).length }} 张在执行
+                </el-button>
+              </template>
+              <div class="order-pop">
+                <div v-for="order in scheduleStore.activeOrdersOfTree(row.id)" :key="order.id" class="order-pop__row">
+                  <el-tag size="small" :type="order.state === '执行中' ? 'warning' : 'info'">{{ order.state }}</el-tag>
+                  <span>{{ order.date }} {{ JOB_KIND_LABEL[order.kind] }} · {{ order.operator }}</span>
+                </div>
+              </div>
+            </el-popover>
+            <span v-else class="cell-sub">无</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click.stop="goSurveys(row)">树体检查</el-button>
@@ -356,5 +393,19 @@ function handleFilterChange(key: string, value: string): void {
 .cell-warn {
   color: #c0392b;
   font-weight: 600;
+}
+
+.order-pop {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.order-pop__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #6b6257;
 }
 </style>
