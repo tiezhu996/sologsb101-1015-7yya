@@ -11,9 +11,11 @@ import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
 import StatBadge from '@/components/common/StatBadge.vue'
 import VigorTag from '@/components/common/VigorTag.vue'
+import WorkOrderTag from '@/components/common/WorkOrderTag.vue'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import { HISTORY_KIND_LABEL, useTreeHistory } from '@/hooks/useTreeHistory'
 import { useReviewStore } from '@/stores/reviewStore'
+import { useScheduleStore } from '@/stores/scheduleStore'
 import { useTreeStore } from '@/stores/treeStore'
 import { DB_NAME, DB_SCHEMA_VERSION, db, exportSnapshot, importSnapshot, resetDatabase } from '@/utils/db'
 import { exportSnapshotJson, exportTreeCsvFile, parseSnapshot } from '@/utils/export'
@@ -22,6 +24,7 @@ import { TREND_OPTIONS, VIGOR_OPTIONS, VIGOR_NEED_FOLLOW_UP, type Review, type R
 const router = useRouter()
 const treeStore = useTreeStore()
 const reviewStore = useReviewStore()
+const scheduleStore = useScheduleStore()
 
 const { rows, loading, remove } = useIdbTable<Review>(db.reviews, { sortByUpdatedAt: false })
 
@@ -84,6 +87,7 @@ const weakCount = computed<number>(
 onMounted(() => {
   void treeStore.loadAll()
   void reviewStore.init()
+  void scheduleStore.init()
   timelineTreeId.value = treeStore.currentTreeId
 })
 
@@ -362,6 +366,11 @@ function handleFilterChange(key: string, value: string): void {
               <template #default="{ row }">
                 <el-tag v-if="row.followUp === ''" type="info" size="small" effect="plain">无需填写</el-tag>
                 <span v-else>{{ row.followUp }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="当前工单" width="180">
+              <template #default="{ row }">
+                <WorkOrderTag :order="scheduleStore.currentOrderOf('review', row.id)" />
               </template>
             </el-table-column>
             <el-table-column label="操作" width="140" fixed="right">

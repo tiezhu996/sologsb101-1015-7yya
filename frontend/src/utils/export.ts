@@ -72,6 +72,10 @@ export function parseSnapshot(text: string): SnapshotParseResult {
       return { ok: false, message: `存档缺少 ${String(key)} 数组。`, snapshot: null }
     }
   }
+  // workorders 为 v3 新增表，旧版存档可缺省（导入时按空数组处理）
+  if (data.workorders !== undefined && !Array.isArray(data.workorders)) {
+    return { ok: false, message: '存档的 workorders 字段必须是数组。', snapshot: null }
+  }
   return { ok: true, message: '存档校验通过。', snapshot: data as DatabaseSnapshot }
 }
 

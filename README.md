@@ -42,7 +42,7 @@ docker compose up -d --build       # 改完代码后重新构建
 | 构建 | Vite 6 | 开发端口与宿主端口一致（22815） |
 | 路由 | Vue Router 4 | `createWebHistory` + 路由懒加载 |
 | 状态管理 | Pinia 2 | setup store，跨页状态集中在 store，页面只读 store |
-| 本地持久化 | Dexie 4（IndexedDB） | 库名 `gbheritagetree`，含 v1 → v2 升级迁移 |
+| 本地持久化 | Dexie 4（IndexedDB） | 库名 `gbheritagetree`，含 v1 → v2 → v3 升级迁移（v3 新增现场工单表） |
 | 容器 | node:20-alpine → nginx:alpine | 多阶段构建，`chmod -R a+rX` 规避静态资源 403 |
 
 ---
@@ -69,13 +69,13 @@ sologsb101-1015/
         ├── App.vue             # 外壳：顶部导航 + 当前古树上下文 + 页脚
         ├── env.d.ts
         ├── styles/main.css
-        ├── types/              # tree.ts survey.ts measure.ts support.ts review.ts
-        ├── stores/             # treeStore.ts measureStore.ts reviewStore.ts
-        ├── components/common/  # VigorTag.vue FilterBar.vue StatBadge.vue EmptyPanel.vue
+        ├── types/              # tree.ts survey.ts measure.ts support.ts review.ts workOrder.ts
+        ├── stores/             # treeStore.ts measureStore.ts reviewStore.ts scheduleStore.ts
+        ├── components/common/  # VigorTag.vue FilterBar.vue StatBadge.vue EmptyPanel.vue WorkOrderTag.vue
         ├── hooks/              # useTreeHistory.ts useIdbTable.ts
-        ├── pages/              # 5 个模块页面
+        ├── pages/              # 7 个模块页面（含排程台 ScheduleBoard、养护总览 OverviewBoard）
         ├── router/index.ts     # 路由表 + ROUTES 常量
-        └── utils/              # dimension.ts db.ts export.ts seed.ts id.ts
+        └── utils/              # dimension.ts db.ts export.ts schedule.ts seed.ts id.ts
 ```
 
 ---
@@ -86,9 +86,11 @@ sologsb101-1015/
 | --- | --- | --- |
 | `/trees` | `pages/TreeList.vue` | 古树一树一档：新建/编辑/级联删除、按保护级别与树种筛选、回显检查次数与最新长势等级 |
 | `/trees/:id/surveys` | `pages/TreeSurvey.vue` | 树体与立地检查：录树高/胸径/冠幅/倾斜/空洞并对比上次、年化生长量、古树历史时间线 |
-| `/measures` | `pages/MeasureBoard.vue` | 复壮措施台账：按类型与实施状态筛选、行内草稿、批量改状态，完成即回写最近复壮日期 |
-| `/supports` | `pages/SupportBoard.vue` | 支撑加固与避雷件登记：超周期未检查自动高亮 + 顶部提醒 + 一键登记本次检查 |
-| `/reviews` | `pages/ReviewView.vue` | 长势复评与结构版本：衰弱/濒危强制填写后续措施、历史时间线、JSON 导入导出 |
+| `/measures` | `pages/MeasureBoard.vue` | 复壮措施台账：按类型与实施状态筛选、行内草稿、批量改状态，完成即回写最近复壮日期；展示该措施当前工单 |
+| `/supports` | `pages/SupportBoard.vue` | 支撑加固与避雷件登记：超周期未检查自动高亮 + 顶部提醒 + 一键登记本次检查；展示该加固件当前工单 |
+| `/reviews` | `pages/ReviewView.vue` | 长势复评与结构版本：衰弱/濒危强制填写后续措施、历史时间线、JSON 导入导出；展示该复评当前工单 |
+| `/schedule` | `pages/ScheduleBoard.vue` | 现场作业排程台：三类作业统一排期，按保护级别/超期天数/复评风险排序，负责人日≤3、同株同日≤1，批次确认冲突留台 |
+| `/overview` | `pages/OverviewBoard.vue` | 养护总览：当前工单、未来 7 天排期、负责人每日负载、每株古树在途工单 |
 
 `/` 重定向到 `/trees`，未匹配路径统一回落到 `/trees`。
 **层级路由支持直接深链**：把 `http://localhost:22815/trees/tree-guozijian-0007/surveys` 直接粘贴到地址栏即可打开；
@@ -100,12 +102,14 @@ sologsb101-1015/
 
 * **持久化方案**：IndexedDB，通过 Dexie 封装（`src/utils/db.ts`）。
 * **数据库名**：`gbheritagetree`。
-* **数据结构版本**：`DB_SCHEMA_VERSION = 2`，`version(1)` 建立全部表，`version(2)` 补齐索引并执行 `.upgrade()` 迁移：
+* **数据结构版本**：`DB_SCHEMA_VERSION = 3`，`version(1)` 建立全部表，`version(2)` 补齐索引并执行 `.upgrade()` 迁移，
+  `version(3)` 新增 `workorders` 现场工单表：
   * `surveys` 增加 `[treeId+date]` 复合索引、`measures` 增加 `operator` 索引、`supports` 增加 `lastCheckDate` 索引、`reviews` 增加 `trend` 索引；
   * 回填 `revision` / `createdAt` / `updatedAt`；
   * 为 `trees` 补齐 `lastMeasureDate`（最近复壮日期）回写字段；
   * 为 `reviews` 补齐 `followUp`（后续措施）字段；
-  * 为 `supports` 补齐 `lastCheckDate` 与 `checkCycleMon` 缺省值。
+  * 为 `supports` 补齐 `lastCheckDate` 与 `checkCycleMon` 缺省值；
+  * v3 新增 `workorders` 表（排程台条目与工单共用，索引 `code/kind/treeId/sourceId/status/operator/plannedDate`），旧版 JSON 存档缺省该表时按空数组导入。
 * **表结构**：
 
   | 表 | 主键 | 主要索引 |
@@ -115,6 +119,7 @@ sologsb101-1015/
   | `measures` | id | treeId, type, state, date, operator |
   | `supports` | id | treeId, type, installDate, lastCheckDate |
   | `reviews` | id | treeId, date, vigor, trend |
+  | `workorders` | id | code, kind, treeId, sourceId, status, operator, plannedDate |
 
 * **首屏演示数据**：`initDatabase()` 在打开数据库后检测 `trees` 表是否为空，为空则调用 `utils/seed.ts` 播种，
   幂等且只执行一次。播种链路为 **古树 → 树体检查 / 复壮措施 / 加固件 / 长势复评** 三层互相引用：
@@ -124,7 +129,7 @@ sologsb101-1015/
     7 条长势复评（含衰弱 / 濒危样本且均已填写后续措施）。
   * 固定 id 如 `tree-guozijian-0007`、`tree-xiangshan-0113`、`tree-ritan-0246` 可直接用于深链验证。
 * **其他本地数据**：`localStorage` 仅保存「最近选中的古树 id」这一界面偏好，不存业务数据。
-* 删除古树会**级联清理**其下的树体检查、复壮措施、加固件与复评记录（同一 Dexie 事务内完成）。
+* 删除古树会**级联清理**其下的树体检查、复壮措施、加固件、长势复评与现场工单（同一 Dexie 事务内完成）。
 
 ---
 
@@ -141,6 +146,7 @@ npm run dev          # http://localhost:22815
 ```bash
 npm run build        # vue-tsc --noEmit && vite build（零错误）
 npm run typecheck    # 仅做 TypeScript 类型检查
+npm run test         # 排程算法 + 批次确认集成断言（node + fake-indexeddb）
 npm run preview      # 预览 dist 产物
 ```
 
@@ -155,3 +161,9 @@ npm run preview      # 预览 dist 产物
   「登记本次检查」会把最近检查日期置为今天并解除高亮。
 * **复评强制校验**：长势为「衰弱」或「濒危」时，后续措施为必填项，未填写无法保存。
 * **措施回写**：复壮措施状态改为「已完成」时，若实施日期晚于古树现有最近复壮日期，则自动回写该日期。
+* **排程台候选**：状态为「计划 / 实施中」的复壮措施、超过检查周期未检查的加固件、最新长势为衰弱 / 濒危的复评自动入候选；已有排程台条目或活跃工单的来源不重复入台。
+* **排期优先级**：保护级别（一级 > 二级 > 三级）→ 超期天数（加固件超检查周期天数、措施超拟实施日期天数、衰弱复评距上次复评天数）→ 复评风险（濒危 / 衰弱且下降最高），依次降序。
+* **派工硬约束**：一名负责人每天最多承接 **3 件**现场作业；**同株古树当天只安排一类现场作业**（复壮措施 / 加固件复查 / 衰弱复评互斥）。自动排序贪心派工，表内手工调整也会即时校验。
+* **批次确认与冲突留台**：确认时逐条重新读取来源台账，与入台时快照指纹（含古树保护级别与来源关键字段）比对；确认期间来源被修改或删除、或违反派工约束的条目**留在排程台标记冲突原因**，其余条目生成连续工单号 `GD-YYYYMMDD-NNN` 与批次号。冲突条目刷新快照并重新排序后可再次确认。
+* **当前工单**：已生成未完工（`scheduled`）的工单同时显示在**来源台账**（措施 / 加固件 / 复评列表的「当前工单」列）与**养护总览**；完工登记会同步回写加固件最近检查日期或措施「已完成」状态，取消工单后来源可重新进入排程台。
+* 排程算法与批次确认附带本地断言：`npm run test:schedule`（纯函数：候选 / 优先级 / 派单约束）、`npm run test:confirm`（fake-indexeddb 集成：冲突留台 / 工单号 / 完工回写）。

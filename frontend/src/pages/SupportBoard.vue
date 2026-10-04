@@ -10,14 +10,17 @@ import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
 import StatBadge from '@/components/common/StatBadge.vue'
 import VigorTag from '@/components/common/VigorTag.vue'
+import WorkOrderTag from '@/components/common/WorkOrderTag.vue'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import { useTreeStore } from '@/stores/treeStore'
+import { useScheduleStore } from '@/stores/scheduleStore'
 import { db, markSupportChecked } from '@/utils/db'
 import { SUPPORT_TYPE_OPTIONS, type Support, type SupportDraft, type SupportType } from '@/types/support'
 import { isSupportOverdue, nextCheckDate, overdueDays } from '@/utils/dimension'
 import { today } from '@/utils/id'
 
 const treeStore = useTreeStore()
+const scheduleStore = useScheduleStore()
 
 const { rows, loading, create, update, remove } = useIdbTable<Support>(db.supports, { sortByUpdatedAt: false })
 
@@ -75,6 +78,7 @@ const coveredTrees = computed<number>(() => new Set(rows.value.map((row) => row.
 
 onMounted(() => {
   void treeStore.loadAll()
+  void scheduleStore.init()
 })
 
 function rowClassName({ row }: { row: Support }): string {
@@ -282,6 +286,11 @@ function handleFilterChange(key: string, value: string): void {
               超期 {{ overdueDays(row.lastCheckDate, row.checkCycleMon) }} 天
             </el-tag>
             <el-tag v-else type="success" effect="light">周期内</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前工单" width="180">
+          <template #default="{ row }">
+            <WorkOrderTag :order="scheduleStore.currentOrderOf('support', row.id)" />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">

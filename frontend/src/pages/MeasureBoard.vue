@@ -10,9 +10,11 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
 import StatBadge from '@/components/common/StatBadge.vue'
+import WorkOrderTag from '@/components/common/WorkOrderTag.vue'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import { useMeasureStore } from '@/stores/measureStore'
 import { useTreeStore } from '@/stores/treeStore'
+import { useScheduleStore } from '@/stores/scheduleStore'
 import { db } from '@/utils/db'
 import {
   MEASURE_STATE_OPTIONS,
@@ -25,6 +27,7 @@ import {
 
 const treeStore = useTreeStore()
 const measureStore = useMeasureStore()
+const scheduleStore = useScheduleStore()
 
 const { rows, loading } = useIdbTable<Measure>(db.measures, { sortByUpdatedAt: false })
 
@@ -82,6 +85,7 @@ const stats = computed(() => {
 onMounted(() => {
   void treeStore.loadAll()
   void measureStore.init()
+  void scheduleStore.init()
 })
 
 function openCreate(): void {
@@ -350,6 +354,11 @@ function handleFilterChange(key: string, value: string): void {
             >
               改草稿
             </el-button>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前工单" width="180">
+          <template #default="{ row }">
+            <WorkOrderTag :order="scheduleStore.currentOrderOf('measure', row.id)" />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="230" fixed="right">
